@@ -5,3 +5,16 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/slots}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      minimum-expected-value:
+        http.server.requests: 1ms
+      maximum-expected-value:
+        http.server.requests: 10s
