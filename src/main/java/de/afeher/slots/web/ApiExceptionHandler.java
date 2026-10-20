@@ -3,6 +3,7 @@ package de.afeher.slots.web;
 import de.afeher.slots.domain.SlotConflictException;
 import de.afeher.slots.persistence.SlotOverlapException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -25,6 +26,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 	@ExceptionHandler({SlotConflictException.class, SlotOverlapException.class})
 	ProblemDetail handleConflict(RuntimeException e) {
 		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
+	}
+
+	@ExceptionHandler
+	ProblemDetail handle(PessimisticLockingFailureException e) {
+		return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+				"Request collided with a concurrent change; retry it");
 	}
 
 	@ExceptionHandler
