@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.assertj.MvcTestResult;
 
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -55,6 +56,25 @@ class ConcurrencyIT {
 
 		assertThat(statuses).containsExactlyInAnyOrderElementsOf(oneWinner(CONTENDERS, 201, 409));
 		assertThat(jdbc.sql("select count(*) from slot").query(Long.class).single()).isEqualTo(1);
+	}
+
+	@RepeatedTest(REPETITIONS)
+	void overlappingCreatesAreRejectedAsOverlapsNotDeadlocks() {
+		List<Supplier<String>> requests = IntStream.range(0, 4 * CONTENDERS)
+				.<Supplier<String>>mapToObj(i -> () -> {
+					MvcTestResult result = mvc.post().uri("/api/slots")
+							.contentType(MediaType.APPLICATION_JSON)
+							.content(slot(OWNER, i % 2 == 0 ? "09:00" : "09:30", i % 2 == 0 ? "10:00" : "10:30", null))
+							.exchange();
+					return result.getResponse().getStatus() + " " + body(result);
+				})
+				.toList();
+
+		List<String> outcomes = concurrently(requests);
+
+		assertThat(outcomes).filteredOn(outcome -> outcome.startsWith("201")).hasSize(1);
+		assertThat(outcomes).filteredOn(outcome -> !outcome.startsWith("201"))
+				.allSatisfy(outcome -> assertThat(outcome).startsWith("409").contains("overlaps"));
 	}
 
 	@RepeatedTest(REPETITIONS)
@@ -144,6 +164,15 @@ class ConcurrencyIT {
 		List<Integer> expected = new ArrayList<>(Collections.nCopies(contenders - 1, loser));
 		expected.add(winner);
 		return expected;
+	}
+
+	private static String body(MvcTestResult result) {
+		try {
+			return result.getResponse().getContentAsString();
+		}
+		catch (UnsupportedEncodingException e) {
+			throw new IllegalStateException(e);
+		}
 	}
 
 	private static <T> List<T> concurrently(List<Supplier<T>> requests) {

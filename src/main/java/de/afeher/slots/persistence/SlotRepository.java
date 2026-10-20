@@ -7,6 +7,7 @@ import de.afeher.slots.domain.TimeRange;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Array;
 import java.sql.ResultSet;
@@ -36,7 +37,9 @@ public class SlotRepository {
 		this.jdbc = jdbc;
 	}
 
+	@Transactional
 	public Slot insert(Slot slot) {
+		lockCalendar(slot.userId());
 		long id = checked(slot.userId(), () -> jdbc.sql("""
 						insert into slot (user_id, begin_at, end_at, status, title, description, participants)
 						values (:userId, :begin, :end, :status, :title, :description, :participants)
@@ -69,7 +72,9 @@ public class SlotRepository {
 				.list();
 	}
 
+	@Transactional
 	public Optional<Slot> update(Slot slot) {
+		lockCalendar(slot.userId());
 		int updated = checked(slot.userId(), () -> jdbc.sql("""
 						update slot
 						set begin_at = :begin, end_at = :end, status = :status,
@@ -92,6 +97,10 @@ public class SlotRepository {
 				.param("id", slot.id())
 				.param("version", slot.version())
 				.update() > 0;
+	}
+
+	private void lockCalendar(long userId) {
+		jdbc.sql("select pg_advisory_xact_lock(:userId)").param("userId", userId).query().singleRow();
 	}
 
 	private static Map<String, Object> parameters(Slot slot) {
