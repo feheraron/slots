@@ -191,6 +191,52 @@ class SlotApiIT {
 		assertThat(delete("/api/slots/{id}/meeting", id)).hasStatus(HttpStatus.CONFLICT);
 	}
 
+	@Test
+	void listsUserSlotsInWindow() {
+		create(slot(OWNER, "13:00", "14:00", "BUSY"));
+		create(slot(OWNER, "09:00", "10:00", null));
+		create(slot(OWNER, "06:00", "07:00", null));
+		create(slot(OWNER + 1, "09:00", "10:00", null));
+
+		MvcTestResult all = list("/api/slots", "08:00", "18:00", null);
+		MvcTestResult busy = list("/api/slots", "08:00", "18:00", "BUSY");
+
+		assertThat(all).hasStatusOk();
+		assertThat(all).bodyJson().extractingPath("$[*].begin").asArray()
+				.containsExactly(at("09:00"), at("13:00"));
+		assertThat(busy).bodyJson().extractingPath("$[*].begin").asArray().containsExactly(at("13:00"));
+	}
+
+	@Test
+	void blockViewMergesSlotsInWindow() {
+		create(slot(OWNER, "07:00", "09:00", null));
+		create(slot(OWNER, "09:00", "10:00", null));
+		long meeting = id(create(slot(OWNER, "10:00", "11:00", null)));
+		book(meeting, meeting("Design review"));
+		create(slot(OWNER, "11:00", "12:00", "BUSY"));
+		create(slot(OWNER, "14:00", "15:00", null));
+
+		MvcTestResult view = list("/api/slots/block-view", "08:00", "18:00", null);
+
+		assertThat(view).hasStatusOk();
+		assertThat(view).bodyJson().isEqualTo("""
+				[{"begin":"2026-11-02T08:00:00Z","end":"2026-11-02T10:00:00Z","status":"FREE"},
+				 {"begin":"2026-11-02T10:00:00Z","end":"2026-11-02T12:00:00Z","status":"BUSY"},
+				 {"begin":"2026-11-02T14:00:00Z","end":"2026-11-02T15:00:00Z","status":"FREE"}]""");
+	}
+
+	@Test
+	void queriesValidateWindow() {
+		for (String uri : new String[] {"/api/slots", "/api/slots/block-view"}) {
+			assertThat(list(uri, "10:00", "09:00", null)).hasStatus(HttpStatus.BAD_REQUEST);
+			assertThat(mvc.get().uri(uri).param("userId", "1001").param("from", at("09:00"))
+					.param("to", "2026-12-04T09:00:00Z").exchange()).hasStatus(HttpStatus.BAD_REQUEST);
+			assertThat(mvc.get().uri(uri).param("userId", "0").param("from", at("09:00"))
+					.param("to", at("10:00")).exchange()).hasStatus(HttpStatus.BAD_REQUEST);
+			assertThat(mvc.get().uri(uri).param("userId", "1001").exchange()).hasStatus(HttpStatus.BAD_REQUEST);
+		}
+	}
+
 	MvcTestResult create(String json) {
 		return mvc.post().uri("/api/slots").contentType(MediaType.APPLICATION_JSON).content(json).exchange();
 	}
@@ -204,6 +250,15 @@ class SlotApiIT {
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(json)
 				.exchange();
+	}
+
+	MvcTestResult list(String uri, String from, String to, String status) {
+		var request = mvc.get().uri(uri).param("userId", String.valueOf(OWNER)).param("from", at(from))
+				.param("to", at(to));
+		if (status != null) {
+			request = request.param("status", status);
+		}
+		return request.exchange();
 	}
 
 	MvcTestResult delete(String uri, long id) {

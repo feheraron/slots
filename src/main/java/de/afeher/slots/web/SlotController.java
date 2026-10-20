@@ -1,9 +1,13 @@
 package de.afeher.slots.web;
 
+import de.afeher.slots.domain.Calendar;
 import de.afeher.slots.domain.Slot;
 import de.afeher.slots.domain.SlotConflictException;
+import de.afeher.slots.domain.Status;
+import de.afeher.slots.domain.TimeRange;
 import de.afeher.slots.persistence.SlotRepository;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,14 +16,20 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.function.UnaryOperator;
 
 @RestController
 @RequestMapping("/api/slots")
 public class SlotController {
+
+	static final Duration MAX_WINDOW = Duration.ofDays(31);
 
 	private final SlotRepository repository;
 
@@ -40,6 +50,21 @@ public class SlotController {
 	@GetMapping("/{id}")
 	public SlotResponse get(@PathVariable long id) {
 		return SlotResponse.of(find(id));
+	}
+
+	@GetMapping
+	public List<SlotResponse> list(@RequestParam @Positive long userId, @RequestParam Instant from,
+			@RequestParam Instant to, @RequestParam(required = false) Status status) {
+		return repository.findByUser(userId, window(from, to), status).stream().map(SlotResponse::of).toList();
+	}
+
+	@GetMapping("/block-view")
+	public List<BlockResponse> blockView(@RequestParam @Positive long userId, @RequestParam Instant from,
+			@RequestParam Instant to) {
+		TimeRange window = window(from, to);
+		return Calendar.of(window, repository.findByUser(userId, window, null)).stream()
+				.map(BlockResponse::of)
+				.toList();
 	}
 
 	@PutMapping("/{id}")
@@ -70,6 +95,14 @@ public class SlotController {
 	public ResponseEntity<Void> cancelMeeting(@PathVariable long id) {
 		change(id, Slot::cancelMeeting);
 		return ResponseEntity.noContent().build();
+	}
+
+	private static TimeRange window(Instant from, Instant to) {
+		TimeRange window = new TimeRange(from, to);
+		if (Duration.between(from, to).compareTo(MAX_WINDOW) > 0) {
+			throw new IllegalArgumentException("The window must be at most " + MAX_WINDOW.toDays() + " days");
+		}
+		return window;
 	}
 
 	private Slot find(long id) {
