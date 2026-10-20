@@ -1,0 +1,161 @@
+package de.afeher.slots.web;
+
+import com.jayway.jsonpath.JsonPath;
+import de.afeher.slots.TestcontainersConfiguration;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.web.servlet.assertj.MockMvcTester;
+import org.springframework.test.web.servlet.assertj.MvcTestResult;
+
+import java.io.UnsupportedEncodingException;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@Import(TestcontainersConfiguration.class)
+@SpringBootTest
+@AutoConfigureMockMvc
+class SlotApiIT {
+
+	static final long OWNER = 1001;
+
+	@Autowired
+	MockMvcTester mvc;
+
+	@Autowired
+	JdbcClient jdbc;
+
+	@BeforeEach
+	void clean() {
+		jdbc.sql("delete from slot").update();
+	}
+
+	@Test
+	void createAndGet() {
+		MvcTestResult created = create(slot(OWNER, "09:00", "10:00", null));
+
+		assertThat(created).hasStatus(HttpStatus.CREATED);
+		long id = id(created);
+		assertThat(created.getResponse().getHeader("Location")).endsWith("/api/slots/" + id);
+		MvcTestResult fetched = mvc.get().uri("/api/slots/{id}", id).exchange();
+		assertThat(fetched).hasStatusOk();
+		assertThat(fetched).bodyJson().extractingPath("$.userId").isEqualTo(1001);
+		assertThat(fetched).bodyJson().extractingPath("$.begin").isEqualTo("2026-11-02T09:00:00Z");
+		assertThat(fetched).bodyJson().extractingPath("$.end").isEqualTo("2026-11-02T10:00:00Z");
+		assertThat(fetched).bodyJson().extractingPath("$.status").isEqualTo("FREE");
+		assertThat(fetched).bodyJson().extractingPath("$.meeting").isNull();
+	}
+
+	@Test
+	void createsBusySlot() {
+		MvcTestResult created = create(slot(OWNER, "09:00", "10:00", "BUSY"));
+
+		assertThat(created).bodyJson().extractingPath("$.status").isEqualTo("BUSY");
+	}
+
+	@Test
+	void overlappingSlotConflicts() {
+		create(slot(OWNER, "09:00", "10:00", null));
+
+		MvcTestResult overlapping = create(slot(OWNER, "09:30", "10:30", null));
+
+		assertThat(overlapping).hasStatus(HttpStatus.CONFLICT);
+		assertThat(overlapping).bodyJson().extractingPath("$.detail").asString().contains("overlaps");
+	}
+
+	@Test
+	void invalidSlotsAreRejected() {
+		assertThat(create(slot(OWNER, "10:00", "10:00", null))).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(create(slot(0, "09:00", "10:00", null))).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(create(slot(OWNER, "09:00", "10:00", "MAYBE"))).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(create("{\"userId\":1001,\"begin\":\"2026-11-02T09:00:00Z\"}")).hasStatus(HttpStatus.BAD_REQUEST);
+	}
+
+	@Test
+	void unknownSlotIsNotFound() {
+		assertThat(mvc.get().uri("/api/slots/{id}", 1).exchange()).hasStatus(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
+	void rescheduleMovesSlotAndChangesStatus() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		MvcTestResult moved = reschedule(id, range("10:00", "11:30", "BUSY"));
+
+		assertThat(moved).hasStatusOk();
+		assertThat(moved).bodyJson().extractingPath("$.begin").isEqualTo("2026-11-02T10:00:00Z");
+		assertThat(moved).bodyJson().extractingPath("$.end").isEqualTo("2026-11-02T11:30:00Z");
+		assertThat(moved).bodyJson().extractingPath("$.status").isEqualTo("BUSY");
+		assertThat(moved).bodyJson().extractingPath("$.userId").isEqualTo(1001);
+	}
+
+	@Test
+	void rescheduleOntoAnotherSlotConflicts() {
+		create(slot(OWNER, "09:00", "10:00", null));
+		long id = id(create(slot(OWNER, "10:00", "11:00", null)));
+
+		assertThat(reschedule(id, range("09:30", "11:00", "FREE"))).hasStatus(HttpStatus.CONFLICT);
+	}
+
+	@Test
+	void rescheduleValidatesRequest() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		assertThat(reschedule(id, range("10:00", "09:00", "FREE"))).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(reschedule(id, "{\"begin\":\"%s\",\"end\":\"%s\"}".formatted(at("09:00"), at("10:00"))))
+				.hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(reschedule(id + 1, range("09:00", "10:00", "FREE"))).hasStatus(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
+	void deleteRemovesSlot() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		assertThat(delete("/api/slots/{id}", id)).hasStatus(HttpStatus.NO_CONTENT);
+		assertThat(mvc.get().uri("/api/slots/{id}", id).exchange()).hasStatus(HttpStatus.NOT_FOUND);
+		assertThat(delete("/api/slots/{id}", id)).hasStatus(HttpStatus.NOT_FOUND);
+	}
+
+	MvcTestResult create(String json) {
+		return mvc.post().uri("/api/slots").contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+	}
+
+	MvcTestResult reschedule(long id, String json) {
+		return mvc.put().uri("/api/slots/{id}", id).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
+	}
+
+	MvcTestResult delete(String uri, long id) {
+		return mvc.delete().uri(uri, id).exchange();
+	}
+
+	static String range(String begin, String end, String status) {
+		return "{\"begin\":\"%s\",\"end\":\"%s\",\"status\":\"%s\"}".formatted(at(begin), at(end), status);
+	}
+
+	static String slot(long userId, String begin, String end, String status) {
+		String statusField = status == null ? "" : ",\"status\":\"" + status + "\"";
+		return "{\"userId\":%d,\"begin\":\"%s\",\"end\":\"%s\"%s}"
+				.formatted(userId, at(begin), at(end), statusField);
+	}
+
+	static String at(String time) {
+		return "2026-11-02T" + time + ":00Z";
+	}
+
+	static long id(MvcTestResult result) {
+		try {
+			Number id = JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+			return id.longValue();
+		}
+		catch (UnsupportedEncodingException e) {
+			throw new IllegalStateException(e);
+		}
+	}
+
+}
