@@ -56,6 +56,22 @@ public class SlotController {
 		return ResponseEntity.noContent().build();
 	}
 
+	@PostMapping("/{id}/meeting")
+	public ResponseEntity<SlotResponse> book(@PathVariable long id, @RequestBody MeetingRequest request) {
+		Slot slot = change(id, current -> current.book(request.toMeeting()));
+		var location = ServletUriComponentsBuilder.fromCurrentContextPath()
+				.path("/api/slots/{id}")
+				.buildAndExpand(slot.id())
+				.toUri();
+		return ResponseEntity.created(location).body(SlotResponse.of(slot));
+	}
+
+	@DeleteMapping("/{id}/meeting")
+	public ResponseEntity<Void> cancelMeeting(@PathVariable long id) {
+		change(id, Slot::cancelMeeting);
+		return ResponseEntity.noContent().build();
+	}
+
 	private Slot find(long id) {
 		return repository.findById(id).orElseThrow(() -> new SlotNotFoundException(id));
 	}

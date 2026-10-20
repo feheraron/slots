@@ -15,6 +15,8 @@ import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.assertj.MvcTestResult;
 
 import java.io.UnsupportedEncodingException;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -122,6 +124,73 @@ class SlotApiIT {
 		assertThat(delete("/api/slots/{id}", id)).hasStatus(HttpStatus.NOT_FOUND);
 	}
 
+	@Test
+	void bookingFreeSlotCreatesMeeting() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		MvcTestResult booked = book(id, meeting("Design review", 1003, 1002));
+
+		assertThat(booked).hasStatus(HttpStatus.CREATED);
+		assertThat(booked.getResponse().getHeader("Location")).endsWith("/api/slots/" + id);
+		assertThat(booked).bodyJson().extractingPath("$.status").isEqualTo("BUSY");
+		assertThat(booked).bodyJson().extractingPath("$.meeting.title").isEqualTo("Design review");
+		assertThat(booked).bodyJson().extractingPath("$.meeting.description").isEqualTo("Agenda");
+		assertThat(booked).bodyJson().extractingPath("$.meeting.participants").asArray().containsExactly(1002, 1003);
+	}
+
+	@Test
+	void bookingMeetingSlotAgainConflicts() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+		book(id, meeting("Design review", 1002));
+
+		MvcTestResult again = book(id, meeting("Retro", 1004));
+
+		assertThat(again).hasStatus(HttpStatus.CONFLICT);
+		assertThat(again).bodyJson().extractingPath("$.detail").asString().contains("already holds a meeting");
+		assertThat(mvc.get().uri("/api/slots/{id}", id).exchange())
+				.bodyJson().extractingPath("$.meeting.title").isEqualTo("Design review");
+	}
+
+	@Test
+	void bookingBusySlotConflicts() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", "BUSY")));
+
+		assertThat(book(id, meeting("Design review"))).hasStatus(HttpStatus.CONFLICT);
+	}
+
+	@Test
+	void bookingValidatesMeeting() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		assertThat(book(id, "{\"participants\":[1002]}")).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(book(id, meeting("x".repeat(256)))).hasStatus(HttpStatus.BAD_REQUEST);
+		assertThat(book(id + 1, meeting("Design review"))).hasStatus(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
+	void meetingCannotBeRescheduled() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+		book(id, meeting("Design review"));
+
+		MvcTestResult moved = reschedule(id, range("10:00", "11:00", "BUSY"));
+
+		assertThat(moved).hasStatus(HttpStatus.CONFLICT);
+		assertThat(moved).bodyJson().extractingPath("$.detail").asString().contains("cancel the meeting first");
+	}
+
+	@Test
+	void cancellingMeetingFreesSlot() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+		book(id, meeting("Design review", 1002));
+
+		assertThat(delete("/api/slots/{id}/meeting", id)).hasStatus(HttpStatus.NO_CONTENT);
+
+		MvcTestResult fetched = mvc.get().uri("/api/slots/{id}", id).exchange();
+		assertThat(fetched).bodyJson().extractingPath("$.status").isEqualTo("FREE");
+		assertThat(fetched).bodyJson().extractingPath("$.meeting").isNull();
+		assertThat(delete("/api/slots/{id}/meeting", id)).hasStatus(HttpStatus.CONFLICT);
+	}
+
 	MvcTestResult create(String json) {
 		return mvc.post().uri("/api/slots").contentType(MediaType.APPLICATION_JSON).content(json).exchange();
 	}
@@ -130,12 +199,26 @@ class SlotApiIT {
 		return mvc.put().uri("/api/slots/{id}", id).contentType(MediaType.APPLICATION_JSON).content(json).exchange();
 	}
 
+	MvcTestResult book(long id, String json) {
+		return mvc.post().uri("/api/slots/{id}/meeting", id)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json)
+				.exchange();
+	}
+
 	MvcTestResult delete(String uri, long id) {
 		return mvc.delete().uri(uri, id).exchange();
 	}
 
 	static String range(String begin, String end, String status) {
 		return "{\"begin\":\"%s\",\"end\":\"%s\",\"status\":\"%s\"}".formatted(at(begin), at(end), status);
+	}
+
+	static String meeting(String title, long... participants) {
+		String ids = Arrays.stream(participants)
+				.mapToObj(String::valueOf)
+				.collect(Collectors.joining(","));
+		return "{\"title\":\"%s\",\"description\":\"Agenda\",\"participants\":[%s]}".formatted(title, ids);
 	}
 
 	static String slot(long userId, String begin, String end, String status) {
