@@ -1,0 +1,7 @@
+spring:
+  application:
+    name: slots
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/slots}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
