@@ -28,6 +28,10 @@ public record Slot(Long id, long userId, TimeRange range, Status status, Meeting
 		return new Slot(id, userId, range, status, null, version);
 	}
 
+	public void ensureDeletable() {
+		requireNoMeeting();
+	}
+
 	public Slot book(Meeting meeting) {
 		Objects.requireNonNull(meeting, "meeting");
 		if (hasMeeting()) {
@@ -37,6 +41,14 @@ public record Slot(Long id, long userId, TimeRange range, Status status, Meeting
 			throw new SlotConflictException("Slot " + id + " is busy");
 		}
 		return new Slot(id, userId, range, Status.BUSY, meeting, version);
+	}
+
+	public Slot editMeeting(Meeting meeting) {
+		Objects.requireNonNull(meeting, "meeting");
+		if (!hasMeeting()) {
+			throw new SlotConflictException("Slot " + id + " holds no meeting");
+		}
+		return new Slot(id, userId, range, status, meeting, version);
 	}
 
 	private void requireNoMeeting() {

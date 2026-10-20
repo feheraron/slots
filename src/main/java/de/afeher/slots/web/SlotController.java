@@ -75,6 +75,7 @@ public class SlotController {
 	@DeleteMapping("/{id}")
 	public ResponseEntity<Void> delete(@PathVariable long id) {
 		Slot slot = find(id);
+		slot.ensureDeletable();
 		if (!repository.delete(slot)) {
 			throw concurrentChange(id);
 		}
@@ -89,6 +90,11 @@ public class SlotController {
 				.buildAndExpand(slot.id())
 				.toUri();
 		return ResponseEntity.created(location).body(SlotResponse.of(slot));
+	}
+
+	@PutMapping("/{id}/meeting")
+	public SlotResponse editMeeting(@PathVariable long id, @RequestBody MeetingRequest request) {
+		return SlotResponse.of(change(id, slot -> slot.editMeeting(request.toMeeting())));
 	}
 
 	@DeleteMapping("/{id}/meeting")

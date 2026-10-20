@@ -152,6 +152,27 @@ class SlotApiIT {
 	}
 
 	@Test
+	void editingMeetingReplacesIt() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+		book(id, meeting("Design review", 1002));
+
+		MvcTestResult edited = edit(id, meeting("Retro", 1004));
+
+		assertThat(edited).hasStatusOk();
+		assertThat(edited).bodyJson().extractingPath("$.status").isEqualTo("BUSY");
+		assertThat(edited).bodyJson().extractingPath("$.meeting.title").isEqualTo("Retro");
+		assertThat(edited).bodyJson().extractingPath("$.meeting.participants").asArray().containsExactly(1004);
+	}
+
+	@Test
+	void editingWithoutMeetingConflicts() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+
+		assertThat(edit(id, meeting("Retro"))).hasStatus(HttpStatus.CONFLICT);
+		assertThat(edit(id + 1, meeting("Retro"))).hasStatus(HttpStatus.NOT_FOUND);
+	}
+
+	@Test
 	void bookingBusySlotConflicts() {
 		long id = id(create(slot(OWNER, "09:00", "10:00", "BUSY")));
 
@@ -189,6 +210,18 @@ class SlotApiIT {
 		assertThat(fetched).bodyJson().extractingPath("$.status").isEqualTo("FREE");
 		assertThat(fetched).bodyJson().extractingPath("$.meeting").isNull();
 		assertThat(delete("/api/slots/{id}/meeting", id)).hasStatus(HttpStatus.CONFLICT);
+	}
+
+	@Test
+	void deletingMeetingSlotConflicts() {
+		long id = id(create(slot(OWNER, "09:00", "10:00", null)));
+		book(id, meeting("Design review"));
+
+		MvcTestResult deleted = delete("/api/slots/{id}", id);
+
+		assertThat(deleted).hasStatus(HttpStatus.CONFLICT);
+		assertThat(deleted).bodyJson().extractingPath("$.detail").asString().contains("cancel the meeting first");
+		assertThat(mvc.get().uri("/api/slots/{id}", id).exchange()).hasStatusOk();
 	}
 
 	@Test
@@ -247,6 +280,13 @@ class SlotApiIT {
 
 	MvcTestResult book(long id, String json) {
 		return mvc.post().uri("/api/slots/{id}/meeting", id)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(json)
+				.exchange();
+	}
+
+	MvcTestResult edit(long id, String json) {
+		return mvc.put().uri("/api/slots/{id}/meeting", id)
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(json)
 				.exchange();

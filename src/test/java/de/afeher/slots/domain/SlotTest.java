@@ -56,6 +56,20 @@ class SlotTest {
 	}
 
 	@Test
+	void slotWithoutMeetingIsDeletable() {
+		stored(BUSY).ensureDeletable();
+	}
+
+	@Test
+	void slotWithMeetingIsNotDeletable() {
+		Slot meeting = stored(FREE).book(MEETING);
+
+		assertThatThrownBy(meeting::ensureDeletable)
+				.isInstanceOf(SlotConflictException.class)
+				.hasMessageContaining("cancel the meeting first");
+	}
+
+	@Test
 	void bookingFreeSlotMakesItBusy() {
 		Slot slot = stored(FREE).book(MEETING);
 
@@ -77,6 +91,23 @@ class SlotTest {
 		assertThatThrownBy(() -> meeting.book(MEETING))
 				.isInstanceOf(SlotConflictException.class)
 				.hasMessageContaining("already holds a meeting");
+	}
+
+	@Test
+	void editingMeetingReplacesIt() {
+		Meeting replacement = new Meeting("Retro", null, Set.of(4L));
+
+		Slot slot = stored(FREE).book(MEETING).editMeeting(replacement);
+
+		assertThat(slot.meeting()).isEqualTo(replacement);
+		assertThat(slot.status()).isEqualTo(BUSY);
+	}
+
+	@Test
+	void editingWithoutMeetingConflicts() {
+		assertThatThrownBy(() -> stored(FREE).editMeeting(MEETING))
+				.isInstanceOf(SlotConflictException.class)
+				.hasMessageContaining("holds no meeting");
 	}
 
 	@Test
