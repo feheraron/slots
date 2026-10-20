@@ -34,6 +34,18 @@ class TimeRangeTest {
 		assertThat(range("10:00", "11:00").overlaps(range("09:00", "10:00"))).isFalse();
 	}
 
+	@Test
+	void clipCutsRangeToWindow() {
+		assertThat(range("08:00", "10:00").clip(range("09:00", "18:00"))).contains(range("09:00", "10:00"));
+		assertThat(range("17:00", "19:00").clip(range("09:00", "18:00"))).contains(range("17:00", "18:00"));
+		assertThat(range("10:00", "11:00").clip(range("09:00", "18:00"))).contains(range("10:00", "11:00"));
+	}
+
+	@Test
+	void clipOutsideWindowIsEmpty() {
+		assertThat(range("07:00", "09:00").clip(range("09:00", "18:00"))).isEmpty();
+	}
+
 	static TimeRange range(String begin, String end) {
 		return new TimeRange(at(begin), at(end));
 	}
