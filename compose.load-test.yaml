@@ -1,0 +1,53 @@
+# Load-test composition, layered on compose.yaml:
+#   docker compose -f compose.yaml -f compose.load-test.yaml up -d --build
+services:
+  postgres:
+    command: >-
+      postgres
+      -c max_connections=110
+      -c shared_buffers=256MB
+      -c effective_cache_size=768MB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=7864kB
+      -c default_statistics_target=500
+      -c random_page_cost=4
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c huge_pages=off
+      -c jit=off
+      -c wal_compression=lz4
+      -c min_wal_size=4GB
+      -c max_wal_size=16GB
+      -c max_worker_processes=8
+      -c max_parallel_workers_per_gather=4
+      -c max_parallel_workers=8
+      -c max_parallel_maintenance_workers=4
+
+  app:
+    environment:
+      SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE: 100
+
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+
+  k6:
+    image: grafana/k6:2.2.0
+    profiles: ["load-test"]
+    user: "${K6_UID:-1000}"
+    environment:
+      BASE_URL: http://app:8080
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(95),p(99),avg,max
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
+    volumes:
+      - ./load-test:/scripts:ro
+      - ./load-test/results:/results
+    command: ["run", "--quiet", "-o", "experimental-prometheus-rw", "/scripts/endpoint-test.js"]
+    depends_on:
+      app:
+        condition: service_healthy
+      prometheus:
+        condition: service_started

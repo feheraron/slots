@@ -14,3 +14,6 @@ out/
 
 ### Windows download markers ###
 *:Zone.Identifier
+
+### Load test results ###
+load-test/results/
